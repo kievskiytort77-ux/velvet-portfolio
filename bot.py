@@ -8,7 +8,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 TOKEN = os.getenv("BOT_TOKEN", "8858872740:AAHpTC4WbQDvNi2K9TTvFwaVpRPsJROAN5M")
-ADMIN_USERNAME = "ez_life_brand"
+ADMIN_USERNAME = "ez_life_92"
 PRODUCTS_FILE = "products.json"
 
 # States
