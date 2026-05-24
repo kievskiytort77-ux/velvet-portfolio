@@ -7,28 +7,27 @@ from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQu
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-TOKEN = os.getenv("BOT_TOKEN", "8858872740:AAHpTC4WbQDvNi2K9TTvFwaVpRPsJROAN5M")
+TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_USERNAME = "ez_life_92"
 PRODUCTS_FILE = "products.json"
 
-# States
-WAIT_PHOTO, WAIT_NAME, WAIT_BRAND, WAIT_CATEGORY, WAIT_PRICE, WAIT_OLD_PRICE, WAIT_BADGE = range(7)
+WAIT_PHOTO, WAIT_NAME, WAIT_BRAND, WAIT_CATEGORY, WAIT_PRICE, WAIT_OLD_PRICE, WAIT_SIZE, WAIT_BADGE = range(8)
 
 CATEGORIES = {
-    "summer": "☀️ Лето",
-    "spring": "🌸 Весна", 
-    "autumn": "🍂 Осень",
-    "winter": "❄️ Зима",
-    "brooch": "✨ Брошки"
+    "summer": "Лето",
+    "spring": "Весна",
+    "autumn": "Осень",
+    "winter": "Зима",
+    "brooch": "Брошки"
 }
 
 BADGES = {
-    "none": "— без значка —",
-    "Хіт": "🔥 Хит",
-    "Новинка": "⭐ Новинка",
-    "−15%": "−15%",
-    "−20%": "−20%",
-    "−30%": "−30%"
+    "none": "без значка",
+    "Hit": "Хит",
+    "New": "Новинка",
+    "sale15": "-15%",
+    "sale20": "-20%",
+    "sale30": "-30%"
 }
 
 def load_products():
@@ -49,30 +48,25 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
         await update.message.reply_text("❌ У вас нет доступа к этому боту.")
         return
-    
     keyboard = [
         [InlineKeyboardButton("➕ Добавить товар", callback_data="add_product")],
         [InlineKeyboardButton("📦 Список товаров", callback_data="list_products")],
         [InlineKeyboardButton("🗑 Удалить товар", callback_data="delete_product")],
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
         "👋 Привет! Это панель управления магазином *Velvet Step*\n\nЧто хочешь сделать?",
-        reply_markup=reply_markup,
+        reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="Markdown"
     )
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    
     if not is_admin(update):
         return
-
     if query.data == "add_product":
         await query.message.reply_text("📸 Отправь фото товара:")
         return WAIT_PHOTO
-    
     elif query.data == "list_products":
         products = load_products()
         if not products:
@@ -80,44 +74,33 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         text = "📦 *Список товаров:*\n\n"
         for i, p in enumerate(products, 1):
-            text += f"{i}. {p['icon']} *{p['name']}* — {p['price']}₴\n"
+            size = f" | Размер: {p.get('size', '—')}" if p.get('size') else ""
+            text += f"{i}. {p['icon']} *{p['name']}* — {p['price']}₴{size}\n"
         await query.message.reply_text(text, parse_mode="Markdown")
-    
     elif query.data == "delete_product":
         products = load_products()
         if not products:
             await query.message.reply_text("Товаров нет.")
             return
-        keyboard = []
-        for p in products:
-            keyboard.append([InlineKeyboardButton(
-                f"🗑 {p['name']} — {p['price']}₴",
-                callback_data=f"del_{p['id']}"
-            )])
+        keyboard = [[InlineKeyboardButton(f"🗑 {p['name']} — {p['price']}₴", callback_data=f"del_{p['id']}")] for p in products]
         keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="cancel")])
         await query.message.reply_text("Выбери товар для удаления:", reply_markup=InlineKeyboardMarkup(keyboard))
-    
     elif query.data.startswith("del_"):
         pid = int(query.data.split("_")[1])
-        products = load_products()
-        products = [p for p in products if p["id"] != pid]
+        products = [p for p in load_products() if p["id"] != pid]
         save_products(products)
         await query.message.reply_text("✅ Товар удалён!")
-    
     elif query.data.startswith("cat_"):
-        cat = query.data.split("_", 1)[1]
-        context.user_data["category"] = cat
-        keyboard = [[InlineKeyboardButton(v, callback_data=f"badge_{k}")] for k, v in BADGES.items()]
-        await query.message.reply_text("🏷 Выбери значок:", reply_markup=InlineKeyboardMarkup(keyboard))
-        return WAIT_BADGE
-    
+        context.user_data["category"] = query.data.split("_", 1)[1]
+        await query.message.reply_text("💰 Введи цену товара (например: 4900):")
+        return WAIT_PRICE
     elif query.data.startswith("badge_"):
-        badge = query.data.split("_", 1)[1]
-        context.user_data["badge"] = None if badge == "none" else badge
+        badge_map = {"none": None, "Hit": "Хіт", "New": "Новинка", "sale15": "-15%", "sale20": "-20%", "sale30": "-30%"}
+        context.user_data["badge"] = badge_map.get(query.data.split("_", 1)[1])
         await save_new_product(query.message, context)
         return ConversationHandler.END
-    
     elif query.data == "cancel":
+        context.user_data.clear()
         await query.message.reply_text("❌ Отменено.")
         return ConversationHandler.END
 
@@ -125,9 +108,6 @@ async def receive_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
         return
     photo = update.message.photo[-1]
-    file = await photo.get_file()
-    file_url = file.file_path
-    context.user_data["photo_url"] = file_url
     context.user_data["file_id"] = photo.file_id
     await update.message.reply_text("✏️ Введи название товара:")
     return WAIT_NAME
@@ -145,30 +125,34 @@ async def receive_brand(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def receive_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        context.user_data["price"] = int(update.message.text)
-        await update.message.reply_text("💰 Введи старую цену (или напиши 0 если нет):")
+        context.user_data["price"] = int(update.message.text.replace(" ", "").replace(",", ""))
+        await update.message.reply_text("💰 Введи старую цену (или 0 если нет):")
         return WAIT_OLD_PRICE
     except:
-        await update.message.reply_text("Введи только число, например: 4900")
+        await update.message.reply_text("⚠️ Введи только число, например: 4900")
         return WAIT_PRICE
 
 async def receive_old_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        val = int(update.message.text)
+        val = int(update.message.text.replace(" ", "").replace(",", ""))
         context.user_data["old"] = val if val > 0 else None
-        keyboard = [[InlineKeyboardButton(v, callback_data=f"badge_{k}")] for k, v in BADGES.items()]
-        await update.message.reply_text("🏷 Выбери значок:", reply_markup=InlineKeyboardMarkup(keyboard))
-        return WAIT_BADGE
+        await update.message.reply_text("📏 Введи размеры (например: 36,37,38,39 или 0 если не нужно):")
+        return WAIT_SIZE
     except:
-        await update.message.reply_text("Введи только число, например: 6000 или 0")
+        await update.message.reply_text("⚠️ Введи только число, например: 6000 или 0")
         return WAIT_OLD_PRICE
+
+async def receive_size(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    size_text = update.message.text.strip()
+    context.user_data["size"] = None if size_text == "0" else size_text
+    keyboard = [[InlineKeyboardButton(v, callback_data=f"badge_{k}")] for k, v in BADGES.items()]
+    await update.message.reply_text("🏷 Выбери значок:", reply_markup=InlineKeyboardMarkup(keyboard))
+    return WAIT_BADGE
 
 async def save_new_product(message, context: ContextTypes.DEFAULT_TYPE):
     import time
     data = context.user_data
-    
-    cat_icons = {"summer":"👡","spring":"🥿","autumn":"🥾","winter":"👢","brooch":"🌸"}
-    
+    cat_icons = {"summer": "👡", "spring": "🥿", "autumn": "🥾", "winter": "👢", "brooch": "🌸"}
     product = {
         "id": int(time.time()),
         "cat": data.get("category", "summer"),
@@ -177,24 +161,22 @@ async def save_new_product(message, context: ContextTypes.DEFAULT_TYPE):
         "name": data.get("name", ""),
         "price": data.get("price", 0),
         "old": data.get("old"),
+        "size": data.get("size"),
         "badge": data.get("badge"),
-        "photo_url": data.get("photo_url", ""),
         "file_id": data.get("file_id", "")
     }
-    
     products = load_products()
     products.append(product)
     save_products(products)
-    
+    size_text = f"\n📏 Размеры: {product['size']}" if product.get("size") else ""
+    old_text = f" (было {product['old']}₴)" if product.get("old") else ""
     text = (
         f"✅ *Товар добавлен!*\n\n"
-        f"📦 *{product['name']}*\n"
+        f"{product['icon']} *{product['name']}*\n"
         f"🏷 {product['brand']}\n"
-        f"💰 {product['price']}₴"
+        f"💰 {product['price']}₴{old_text}"
+        f"{size_text}"
     )
-    if product["old"]:
-        text += f" (было {product['old']}₴)"
-    
     await message.reply_text(text, parse_mode="Markdown")
     context.user_data.clear()
 
@@ -203,13 +185,8 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Отменено.")
     return ConversationHandler.END
 
-async def handle_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Принимает заказы от сайта через webhook"""
-    pass
-
 def main():
     app = Application.builder().token(TOKEN).build()
-    
     conv_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(button_handler, pattern="^add_product$")],
         states={
@@ -219,15 +196,14 @@ def main():
             WAIT_CATEGORY: [CallbackQueryHandler(button_handler, pattern="^cat_")],
             WAIT_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_price)],
             WAIT_OLD_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_old_price)],
+            WAIT_SIZE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_size)],
             WAIT_BADGE: [CallbackQueryHandler(button_handler, pattern="^badge_")],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
-    
     app.add_handler(CommandHandler("start", start))
     app.add_handler(conv_handler)
     app.add_handler(CallbackQueryHandler(button_handler))
-    
     logger.info("Бот запущен!")
     app.run_polling()
 
