@@ -145,8 +145,28 @@ async def receive_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     photo = update.message.photo[-1]
     file = await photo.get_file()
-    context.user_data["photo_url"] = file.file_path
+
+    # Скачиваем фото из Telegram
+    async with httpx.AsyncClient() as client:
+        response = await client.get(file.file_path)
+        photo_bytes = response.content
+
+    # Загружаем в Supabase Storage
+    file_name = f"{photo.file_unique_id}.jpg"
+    upload_url = f"{SUPABASE_URL}/storage/v1/object/products/{file_name}"
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "image/jpeg"
+    }
+    async with httpx.AsyncClient() as client:
+        r = await client.post(upload_url, headers=headers, content=photo_bytes)
+
+    # Постоянная публичная ссылка
+    public_url = f"{SUPABASE_URL}/storage/v1/object/public/products/{file_name}"
+    context.user_data["photo_url"] = public_url
     context.user_data["file_id"] = photo.file_id
+
     await update.message.reply_text("✏️ Введи название товара:")
     return WAIT_NAME
 
