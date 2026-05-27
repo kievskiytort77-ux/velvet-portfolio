@@ -77,28 +77,28 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
         await update.message.reply_text("❌ У вас нет доступа к этому боту.")
         return
+    await show_menu(update.message)
+
+async def show_menu(message):
     keyboard = [
         [InlineKeyboardButton("➕ Добавить товар", callback_data="add_product")],
         [InlineKeyboardButton("📦 Список товаров", callback_data="list_products")],
         [InlineKeyboardButton("🗑 Удалить товар", callback_data="delete_product")],
     ]
-    await update.message.reply_text(
+    await message.reply_text(
         "👋 Привет! Панель управления *Velvet Step*\n\nЧто хочешь сделать?",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="Markdown"
     )
 
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# --- Обработчик кнопок ВНЕ conversation (меню, удаление) ---
+async def main_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     if not is_admin(update):
         return
 
-    if query.data == "add_product":
-        await query.message.reply_text("📸 Отправь фото товара:")
-        return WAIT_PHOTO
-
-    elif query.data == "list_products":
+    if query.data == "list_products":
         products = await get_products()
         if not products:
             await query.message.reply_text("📦 Товаров пока нет.")
@@ -114,59 +114,35 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text("Товаров нет.")
             return
         keyboard = [[InlineKeyboardButton(f"🗑 {p['name']} — {p['price']}₴", callback_data=f"del_{p['id']}")] for p in products]
-        keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="cancel")])
-        await query.message.reply_text("Выбери товар:", reply_markup=InlineKeyboardMarkup(keyboard))
+        keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="cancel_del")])
+        await query.message.reply_text("Выбери товар для удаления:", reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif query.data.startswith("del_"):
         pid = query.data.split("_")[1]
         await delete_product(pid)
         await query.message.reply_text("✅ Товар удалён!")
+        await show_menu(query.message)
 
-    elif query.data.startswith("cat_"):
-        cat = query.data.split("_", 1)[1]
-        context.user_data["category"] = cat
-        context.user_data["icon"] = CAT_ICONS.get(cat, "👟")
-        await query.message.reply_text("💰 Введи цену (например: 4900):")
-        return WAIT_PRICE
-
-    elif query.data.startswith("badge_"):
-        badge = query.data.split("_", 1)[1]
-        context.user_data["badge"] = None if badge == "none" else badge
-        await save_product(query.message, context)
-        return ConversationHandler.END
-
-    elif query.data == "cancel":
-        context.user_data.clear()
+    elif query.data == "cancel_del":
         await query.message.reply_text("❌ Отменено.")
+        await show_menu(query.message)
+
+# --- Начало conversation: добавить товар ---
+async def start_add_product(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not is_admin(update):
         return ConversationHandler.END
+    await query.message.reply_text("📸 Отправь фото товара:")
+    return WAIT_PHOTO
 
 async def receive_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
-        return
+        return ConversationHandler.END
     photo = update.message.photo[-1]
     file = await photo.get_file()
-
-    # Скачиваем фото из Telegram
-    async with httpx.AsyncClient() as client:
-        response = await client.get(file.file_path)
-        photo_bytes = response.content
-
-    # Загружаем в Supabase Storage
-    file_name = f"{photo.file_unique_id}.jpg"
-    upload_url = f"{SUPABASE_URL}/storage/v1/object/products/{file_name}"
-    headers = {
-        "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
-        "Content-Type": "image/jpeg"
-    }
-    async with httpx.AsyncClient() as client:
-        r = await client.post(upload_url, headers=headers, content=photo_bytes)
-
-    # Постоянная публичная ссылка
-    public_url = f"{SUPABASE_URL}/storage/v1/object/public/products/{file_name}"
-    context.user_data["photo_url"] = public_url
+    context.user_data["photo_url"] = file.file_path
     context.user_data["file_id"] = photo.file_id
-
     await update.message.reply_text("✏️ Введи название товара:")
     return WAIT_NAME
 
@@ -180,6 +156,15 @@ async def receive_brand(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton(v, callback_data=f"cat_{k}")] for k, v in CATEGORIES.items()]
     await update.message.reply_text("📂 Выбери категорию:", reply_markup=InlineKeyboardMarkup(keyboard))
     return WAIT_CATEGORY
+
+async def receive_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    cat = query.data.split("_", 1)[1]
+    context.user_data["category"] = cat
+    context.user_data["icon"] = CAT_ICONS.get(cat, "👟")
+    await query.message.reply_text("💰 Введи цену (например: 4900):")
+    return WAIT_PRICE
 
 async def receive_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -213,6 +198,14 @@ async def receive_desc(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🏷 Выбери значок:", reply_markup=InlineKeyboardMarkup(keyboard))
     return WAIT_BADGE
 
+async def receive_badge(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    badge = query.data.split("_", 1)[1]
+    context.user_data["badge"] = None if badge == "none" else badge
+    await save_product(query.message, context)
+    return ConversationHandler.END
+
 async def save_product(message, context: ContextTypes.DEFAULT_TYPE):
     data = context.user_data
     product = {
@@ -241,6 +234,7 @@ async def save_product(message, context: ContextTypes.DEFAULT_TYPE):
             f"{size_text}{desc_text}",
             parse_mode="Markdown"
         )
+        await show_menu(message)
     else:
         await message.reply_text("❌ Ошибка при сохранении. Попробуй ещё раз.")
     context.user_data.clear()
@@ -248,28 +242,33 @@ async def save_product(message, context: ContextTypes.DEFAULT_TYPE):
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     await update.message.reply_text("❌ Отменено.")
+    await show_menu(update.message)
     return ConversationHandler.END
 
 def main():
     app = Application.builder().token(TOKEN).build()
+
     conv_handler = ConversationHandler(
-        entry_points=[CallbackQueryHandler(button_handler, pattern="^add_product$")],
+        entry_points=[CallbackQueryHandler(start_add_product, pattern="^add_product$")],
         states={
             WAIT_PHOTO: [MessageHandler(filters.PHOTO, receive_photo)],
             WAIT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_name)],
             WAIT_BRAND: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_brand)],
-            WAIT_CATEGORY: [CallbackQueryHandler(button_handler, pattern="^cat_")],
+            WAIT_CATEGORY: [CallbackQueryHandler(receive_category, pattern="^cat_")],
             WAIT_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_price)],
             WAIT_OLD_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_old_price)],
             WAIT_SIZE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_size)],
             WAIT_DESC: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_desc)],
-            WAIT_BADGE: [CallbackQueryHandler(button_handler, pattern="^badge_")],
+            WAIT_BADGE: [CallbackQueryHandler(receive_badge, pattern="^badge_")],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
+        allow_reentry=True,
     )
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(conv_handler)
-    app.add_handler(CallbackQueryHandler(button_handler))
+    app.add_handler(CallbackQueryHandler(main_button_handler))
+
     logger.info("Бот запущен!")
     app.run_polling()
 
